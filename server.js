@@ -36,41 +36,27 @@ async function getModulRetailPointId() {
     const headers = { "Authorization": `Bearer ${MODUL_TOKEN}`, "Content-Type": "application/json" };
     try {
         if (!state.companyId) {
-            const accRes = await fetch("https://api.modulbank.ru/v1/account-info", { method: "GET", headers });
+            const accRes = await fetch("https://api.modulbank.ru/v1/account-info", { method: "POST", headers });
             if (accRes.ok) {
                 const data = await accRes.json();
-                state.companyId = data[0]?.companyId || data[0]?.id || data.companyId || data.id;
-                addLog(`ℹ️ Company ID получен: ${state.companyId}`);
-            } else {
-                const errAcc = await accRes.text();
-                // Пробуем POST метод, если GET вернул ошибку
-                const accResPost = await fetch("https://api.modulbank.ru/v1/account-info", { method: "POST", headers });
-                if (accResPost.ok) {
-                    const dataPost = await accResPost.json();
-                    state.companyId = dataPost[0]?.companyId || dataPost[0]?.id || dataPost.companyId || dataPost.id;
-                    addLog(`ℹ️ Company ID получен (POST): ${state.companyId}`);
-                } else {
-                    addLog(`❌ Ошибка account-info: ${accRes.status} - ${errAcc}`);
-                }
+                state.companyId = data[0]?.companyId || data[0]?.id;
             }
         }
         if (state.companyId) {
             const rpRes = await fetch(`https://api.modulbank.ru/v1/sbp/retail-points?companyId=${state.companyId}`, { method: "GET", headers });
             if (rpRes.ok) {
                 const points = await rpRes.json();
+                // Выводим в лог все ваши точки, чтобы вы видели их ID и названия
+                console.log("📌 ДОСТУПНЫЕ ТОРГОВЫЕ ТОЧКИ СБП:", JSON.stringify(points, null, 2));
+                
                 if (points && points.length > 0) {
-                    addLog(`ℹ️ Retail Point ID найден: ${points[0].id}`);
-                    return points[0].id;
-                } else {
-                    addLog(`❌ Торговые точки СБП не найдены в аккаунте Модульбанка!`);
+                    // ЕСЛИ НУЖНА ВТОРАЯ ТОЧКА, замените points[0].id на points[1].id
+                    return points[0].id; 
                 }
-            } else {
-                const errRp = await rpRes.text();
-                addLog(`❌ Ошибка retail-points: ${rpRes.status} - ${errRp}`);
             }
         }
     } catch (e) {
-        addLog(`❌ Исключение в getModulRetailPointId: ${e.message}`);
+        addLog(`❌ Ошибка получения точек: ${e.message}`);
     }
     return null;
 }
