@@ -4,6 +4,8 @@ const path = require('path');
 
 const app = express();
 app.use(express.json());
+
+// Раздаем статические файлы (HTML, CSS, JS) из папки public
 app.use(express.static(path.join(__dirname, 'public')));
 
 // Твои реальные боевые ключи
@@ -24,6 +26,7 @@ function addLog(msg) {
     const now = new Date().toLocaleTimeString('ru-RU');
     state.history.unshift(`[${now}] ${msg}`);
     if (state.history.length > 30) state.history.pop();
+    console.log(`[LOG] ${msg}`);
 }
 
 async function getModulRetailPointId() {
@@ -34,22 +37,40 @@ async function getModulRetailPointId() {
             if (accRes.ok) {
                 const data = await accRes.json();
                 state.companyId = data[0]?.companyId || data[0]?.id;
+                addLog(`ℹ️ Company ID получен: ${state.companyId}`);
+            } else {
+                const errAcc = await accRes.text();
+                addLog(`❌ Ошибка account-info: ${accRes.status} - ${errAcc}`);
             }
         }
         if (state.companyId) {
             const rpRes = await fetch(`https://api.modulbank.ru/v1/sbp/retail-points?companyId=${state.companyId}`, { headers });
             if (rpRes.ok) {
                 const points = await rpRes.json();
-                if (points && points.length > 0) return points[0].id;
+                if (points && points.length > 0) {
+                    addLog(`ℹ️ Retail Point ID найден: ${points[0].id}`);
+                    return points[0].id;
+                } else {
+                    addLog(`❌ Торговые точки СБП не найдены в аккаунте Модульбанка!`);
+                }
+            } else {
+                const errRp = await rpRes.text();
+                addLog(`❌ Ошибка retail-points: ${rpRes.status} - ${errRp}`);
             }
         }
-    } catch (e) {}
+    } catch (e) {
+        addLog(`❌ Исключение в getModulRetailPointId: ${e.message}`);
+    }
     return null;
 }
 
 async function createDynamicQr(amount, description) {
-    if (!state.retailPointId) state.retailPointId = await getModulRetailPointId();
-    if (!state.retailPointId) return { link: null, qrcId: null };
+    if (!state.retailPointId) {
+        state.retailPointId = await getModulRetailPointId();
+    }
+    if (!state.retailPointId) {
+        return { link: null, qrcId: null };
+    }
 
     const url = "https://api.modulbank.ru/v1/sbp/qr-codes/dynamic";
     const headers = { "Authorization": `Bearer ${MODUL_TOKEN}`, "Content-Type": "application/json" };
@@ -65,8 +86,13 @@ async function createDynamicQr(amount, description) {
         if (res.ok) {
             const data = await res.json();
             return { link: data.payload, qrcId: data.qrcId };
+        } else {
+            const errText = await res.text();
+            addLog(`❌ Ошибка создания QR от Модульбанка (${res.status}): ${errText}`);
         }
-    } catch (e) {}
+    } catch (e) {
+        addLog(`❌ Сетевая ошибка при создании QR: ${e.message}`);
+    }
     return { link: null, qrcId: null };
 }
 
@@ -88,8 +114,15 @@ async function sendReceipt(amount, email, itemName) {
             headers: { "Authorization": `Basic ${auth}`, "Content-Type": "application/json" },
             body: JSON.stringify(payload)
         });
-        return res.ok;
+        if (res.ok) {
+            return true;
+        } else {
+            const errReceipt = await res.text();
+            addLog(`❌ Ошибка пробития чека CloudKassir (${res.status}): ${errReceipt}`);
+            return false;
+        }
     } catch (e) {
+        addLog(`❌ Исключение при отправке чека: ${e.message}`);
         return false;
     }
 }
@@ -134,14 +167,19 @@ app.post('/api/pay', async (req, res) => {
         return res.json({ success: true, link });
     }
 
-    res.status(500).json({ success: false, error: "Ошибка генерации QR в Модульбанке." });
+    res.status(500).json({ success: false, error: "Ошибка генерации QR в Модульбанке. Проверьте логи сервера." });
 });
 
 app.get('/api/logs', (req, res) => {
     res.json({ waiting: Object.keys(state.waiting).length, history: state.history });
 });
 
+// Гарантированный возврат главной страницы
+app.get('/', (req, res) => {
+    res.sendFile(path.join(__dirname, 'public', 'index.html'));
+});
+
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
-    console.log(`Сервер запущен на порту ${PORT}`);
+    console.log(`🚀 Сервер запущен и слушает порт ${PORT}`);
 });
