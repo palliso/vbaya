@@ -18,11 +18,13 @@ const CP_SECRET = "f92c854df15751ca8132d7b2e0b0078a";
 const MY_INN = "860231492889";
 const REDIRECT_URL = "https://hellopinky.ru";
 
+// Жёстко фиксируем ID вашей торговой точки «hellopinky | предзаказы»
+const TARGET_RETAIL_POINT_ID = "a828d71d-f5b5-4959-a605-d9a0192d8416";
+
 let state = {
     waiting: {},
     history: [],
-    companyId: null,
-    retailPointId: null
+    retailPointId: TARGET_RETAIL_POINT_ID
 };
 
 function addLog(msg) {
@@ -32,43 +34,7 @@ function addLog(msg) {
     console.log(`[LOG] ${msg}`);
 }
 
-async function getModulRetailPointId() {
-    const headers = { "Authorization": `Bearer ${MODUL_TOKEN}`, "Content-Type": "application/json" };
-    try {
-        if (!state.companyId) {
-            const accRes = await fetch("https://api.modulbank.ru/v1/account-info", { method: "POST", headers });
-            if (accRes.ok) {
-                const data = await accRes.json();
-                state.companyId = data[0]?.companyId || data[0]?.id;
-            }
-        }
-        if (state.companyId) {
-            const rpRes = await fetch(`https://api.modulbank.ru/v1/sbp/retail-points?companyId=${state.companyId}`, { method: "GET", headers });
-            if (rpRes.ok) {
-                const points = await rpRes.json();
-                // Выводим в лог все ваши точки, чтобы вы видели их ID и названия
-                console.log("📌 ДОСТУПНЫЕ ТОРГОВЫЕ ТОЧКИ СБП:", JSON.stringify(points, null, 2));
-                
-                if (points && points.length > 0) {
-                    // ЕСЛИ НУЖНА ВТОРАЯ ТОЧКА, замените points[0].id на points[1].id
-                    return points[0].id; 
-                }
-            }
-        }
-    } catch (e) {
-        addLog(`❌ Ошибка получения точек: ${e.message}`);
-    }
-    return null;
-}
-
 async function createDynamicQr(amount, description) {
-    if (!state.retailPointId) {
-        state.retailPointId = await getModulRetailPointId();
-    }
-    if (!state.retailPointId) {
-        return { link: null, qrcId: null };
-    }
-
     const url = "https://api.modulbank.ru/v1/sbp/qr-codes/dynamic";
     const headers = { "Authorization": `Bearer ${MODUL_TOKEN}`, "Content-Type": "application/json" };
     const payload = {
@@ -178,5 +144,5 @@ app.get('/', (req, res) => {
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
-    console.log(`🚀 Сервер запущен и слушает порт ${PORT}`);
+    console.log(`🚀 Сервер запущен и слушает порт ${PORT} для точки «hellopinky | предзаказы»`);
 });
