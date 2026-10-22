@@ -1,0 +1,147 @@
+const express = require('express');
+const fetch = require('node-fetch');
+const path = require('path');
+
+const app = express();
+app.use(express.json());
+app.use(express.static(path.join(__dirname, 'public')));
+
+// Твои реальные боевые ключи
+const MODUL_TOKEN = "ZWU1MzQzZTctYmUzNi00YjlkLWI3MGMtNDEzYjM0YWYyNDA1OWMzZDlmMTgtOWNjNi00N2E1LTkwMzktNjI0NzIxODRhMGJi";
+const CP_ID = "pk_f36ba0fb530c9daf8fb7b97ec5dee";
+const CP_SECRET = "f92c854df15751ca8132d7b2e0b0078a";
+const MY_INN = "860231492889";
+const REDIRECT_URL = "https://hellopinky.ru";
+
+let state = {
+    waiting: {},
+    history: [],
+    companyId: null,
+    retailPointId: null
+};
+
+function addLog(msg) {
+    const now = new Date().toLocaleTimeString('ru-RU');
+    state.history.unshift(`[${now}] ${msg}`);
+    if (state.history.length > 30) state.history.pop();
+}
+
+async function getModulRetailPointId() {
+    const headers = { "Authorization": `Bearer ${MODUL_TOKEN}`, "Content-Type": "application/json" };
+    try {
+        if (!state.companyId) {
+            const accRes = await fetch("https://api.modulbank.ru/v1/account-info", { method: "POST", headers });
+            if (accRes.ok) {
+                const data = await accRes.json();
+                state.companyId = data[0]?.companyId || data[0]?.id;
+            }
+        }
+        if (state.companyId) {
+            const rpRes = await fetch(`https://api.modulbank.ru/v1/sbp/retail-points?companyId=${state.companyId}`, { headers });
+            if (rpRes.ok) {
+                const points = await rpRes.json();
+                if (points && points.length > 0) return points[0].id;
+            }
+        }
+    } catch (e) {}
+    return null;
+}
+
+async function createDynamicQr(amount, description) {
+    if (!state.retailPointId) state.retailPointId = await getModulRetailPointId();
+    if (!state.retailPointId) return { link: null, qrcId: null };
+
+    const url = "https://api.modulbank.ru/v1/sbp/qr-codes/dynamic";
+    const headers = { "Authorization": `Bearer ${MODUL_TOKEN}`, "Content-Type": "application/json" };
+    const payload = {
+        retailPointId: state.retailPointId,
+        sum: Number(amount),
+        extraInfo: description.substring(0, 140),
+        redirectUrl: REDIRECT_URL
+    };
+
+    try {
+        const res = await fetch(url, { method: "POST", headers, body: JSON.stringify(payload) });
+        if (res.ok) {
+            const data = await res.json();
+            return { link: data.payload, qrcId: data.qrcId };
+        }
+    } catch (e) {}
+    return { link: null, qrcId: null };
+}
+
+async function sendReceipt(amount, email, itemName) {
+    const auth = Buffer.from(`${CP_ID}:${CP_SECRET}`).toString('base64');
+    const payload = {
+        Inn: MY_INN,
+        Type: "Income",
+        CustomerReceipt: {
+            Items: [{ label: itemName, price: Number(amount), quantity: 1, amount: Number(amount), vat: null, method: 1, object: 1 }],
+            taxationSystem: 1,
+            email: email
+        }
+    };
+
+    try {
+        const res = await fetch("https://api.cloudpayments.ru/kkt/receipt", {
+            method: "POST",
+            headers: { "Authorization": `Basic ${auth}`, "Content-Type": "application/json" },
+            body: JSON.stringify(payload)
+        });
+        return res.ok;
+    } catch (e) {
+        return false;
+    }
+}
+
+// Фоновый робот проверки статуса СБП
+setInterval(async () => {
+    const headers = { "Authorization": `Bearer ${MODUL_TOKEN}` };
+    const now = Date.now();
+
+    for (const [qid, o] of Object.entries(state.waiting)) {
+        if (now - o.created_at > 86400000) {
+            delete state.waiting[qid];
+            continue;
+        }
+        try {
+            const res = await fetch(`https://api.modulbank.ru/v1/sbp/qr-codes/${qid}`, { headers });
+            if (res.ok) {
+                const data = await res.json();
+                if (data.status === "Accepted") {
+                    const success = await sendReceipt(data.amount || o.amount, o.email, o.item);
+                    if (success) {
+                        delete state.waiting[qid];
+                        addLog(`✅ Оплата получена, чек для ${o.email} (${o.amount} ₽) успешно отправлен!`);
+                    }
+                }
+            }
+        } catch (e) {}
+    }
+}, 10000);
+
+// API маршруты
+app.post('/api/pay', async (req, res) => {
+    const { item, amount, email } = req.body;
+    if (!item || !amount || amount <= 0 || !email) {
+        return res.status(400).json({ success: false, error: "Заполните все поля." });
+    }
+
+    const { link, qrcId } = await createDynamicQr(amount, item);
+    if (link && qrcId) {
+        state.waiting[qrcId] = { email, item, amount, created_at: Date.now() };
+        addLog(`🌸 Создан СБП QR для ${email} на сумму ${amount} ₽ (${item})`);
+        return res.json({ success: true, link });
+    }
+
+    res.status(500).json({ success: false, error: "Ошибка генерации QR в Модульбанке." });
+});
+
+app.get('/api/logs', (req, res) => {
+    res.json({ waiting: Object.keys(state.waiting).length, history: state.history });
+});
+
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () => {
+    console.log(`Сервер запущен на порту ${PORT}`);
+});
