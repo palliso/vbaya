@@ -1,3 +1,6 @@
+// Отключаем проверку SSL-сертификатов для API Модульбанка
+process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0';
+
 const express = require('express');
 const fetch = require('node-fetch');
 const path = require('path');
@@ -33,18 +36,26 @@ async function getModulRetailPointId() {
     const headers = { "Authorization": `Bearer ${MODUL_TOKEN}`, "Content-Type": "application/json" };
     try {
         if (!state.companyId) {
-            const accRes = await fetch("https://api.modulbank.ru/v1/account-info", { method: "POST", headers });
+            const accRes = await fetch("https://api.modulbank.ru/v1/account-info", { method: "GET", headers });
             if (accRes.ok) {
                 const data = await accRes.json();
-                state.companyId = data[0]?.companyId || data[0]?.id;
+                state.companyId = data[0]?.companyId || data[0]?.id || data.companyId || data.id;
                 addLog(`ℹ️ Company ID получен: ${state.companyId}`);
             } else {
                 const errAcc = await accRes.text();
-                addLog(`❌ Ошибка account-info: ${accRes.status} - ${errAcc}`);
+                // Пробуем POST метод, если GET вернул ошибку
+                const accResPost = await fetch("https://api.modulbank.ru/v1/account-info", { method: "POST", headers });
+                if (accResPost.ok) {
+                    const dataPost = await accResPost.json();
+                    state.companyId = dataPost[0]?.companyId || dataPost[0]?.id || dataPost.companyId || dataPost.id;
+                    addLog(`ℹ️ Company ID получен (POST): ${state.companyId}`);
+                } else {
+                    addLog(`❌ Ошибка account-info: ${accRes.status} - ${errAcc}`);
+                }
             }
         }
         if (state.companyId) {
-            const rpRes = await fetch(`https://api.modulbank.ru/v1/sbp/retail-points?companyId=${state.companyId}`, { headers });
+            const rpRes = await fetch(`https://api.modulbank.ru/v1/sbp/retail-points?companyId=${state.companyId}`, { method: "GET", headers });
             if (rpRes.ok) {
                 const points = await rpRes.json();
                 if (points && points.length > 0) {
@@ -138,7 +149,7 @@ setInterval(async () => {
             continue;
         }
         try {
-            const res = await fetch(`https://api.modulbank.ru/v1/sbp/qr-codes/${qid}`, { headers });
+            const res = await fetch(`https://api.modulbank.ru/v1/sbp/qr-codes/${qid}`, { method: "GET", headers });
             if (res.ok) {
                 const data = await res.json();
                 if (data.status === "Accepted") {
